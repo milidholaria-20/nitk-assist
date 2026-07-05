@@ -6,15 +6,35 @@ import CalendarGrid from '../components/CalendarGrid';
 
 export default function Home() {
     const [events, setEvents] = useState([]);
+    const [allEvents, setAllEvents] = useState([]);
     const [clubs, setClubs] = useState([]);
     const [myClubs, setMyClubs] = useState([]);
-    const [activeTab, setActiveTab] = useState('feed'); 
-    
+    const [activeTab, setActiveTab] = useState('feed');
+    const [loadingEvents, setLoadingEvents] = useState(true);
+    const [loadingClubs, setLoadingClubs] = useState(false);
+    const [showPersonalized, setShowPersonalized] = useState(false);
+
     const eventToAddRef = useRef(null);
     const [addingEventId, setAddingEventId] = useState(null);
-
     const userToken = localStorage.getItem('token');
 
+    // Fetch ALL events (default view)
+    const fetchAllEvents = async () => {
+        setLoadingEvents(true);
+        try {
+            const res = await axios.get('http://localhost:5000/api/events', {
+                headers: { Authorization: `Bearer ${userToken}` }
+            });
+            setAllEvents(res.data);
+            if (!showPersonalized) setEvents(res.data);
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setLoadingEvents(false);
+        }
+    };
+
+    // Fetch personalized events (when user follows clubs)
     const fetchPersonalizedEvents = async () => {
         try {
             const res = await axios.get('http://localhost:5000/api/events/personalized', {
@@ -23,7 +43,7 @@ export default function Home() {
             setEvents(res.data);
         } catch (err) {
             console.error(err);
-            if (err.response && err.response.status === 404) {
+            if (err.response?.status === 404) {
                 localStorage.clear();
                 window.location.href = '/login';
             }
@@ -31,11 +51,14 @@ export default function Home() {
     };
 
     const fetchAllClubs = async () => {
+        setLoadingClubs(true);
         try {
             const res = await axios.get('http://localhost:5000/api/clubs');
             setClubs(res.data);
         } catch (err) {
             console.error(err);
+        } finally {
+            setLoadingClubs(false);
         }
     };
 
@@ -55,16 +78,24 @@ export default function Home() {
             const res = await axios.post(`http://localhost:5000/api/clubs/${clubId}/follow`, {}, {
                 headers: { Authorization: `Bearer ${userToken}` }
             });
-            
             if (res.data.followed) {
                 setMyClubs([...myClubs, clubId]);
             } else {
                 setMyClubs(myClubs.filter(id => id !== clubId));
             }
-            
-            fetchPersonalizedEvents();
+            if (showPersonalized) fetchPersonalizedEvents();
         } catch (err) {
             console.error(err);
+        }
+    };
+
+    const toggleFeedMode = () => {
+        const next = !showPersonalized;
+        setShowPersonalized(next);
+        if (next) {
+            fetchPersonalizedEvents();
+        } else {
+            setEvents(allEvents);
         }
     };
 
@@ -73,16 +104,9 @@ export default function Home() {
         onSuccess: async (tokenResponse) => {
             const eventToAdd = eventToAddRef.current;
             if (!eventToAdd) return;
-            
             setAddingEventId(eventToAdd.id);
             try {
-                const accessToken = tokenResponse.access_token;
-                
-                let startDateTime = new Date(eventToAdd.date);
-                if (isNaN(startDateTime.getTime())) {
-                    startDateTime = new Date();
-                }
-                
+                const startDateTime = new Date(eventToAdd.date);
                 const gEvent = {
                     summary: eventToAdd.title,
                     description: eventToAdd.description || '',
@@ -92,29 +116,22 @@ export default function Home() {
                         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata',
                     },
                     end: {
-                        dateTime: new Date(startDateTime.getTime() + 60*60*1000).toISOString(),
+                        dateTime: new Date(startDateTime.getTime() + 60 * 60 * 1000).toISOString(),
                         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata',
                     }
                 };
-    
                 await axios.post('https://www.googleapis.com/calendar/v3/calendars/primary/events', gEvent, {
-                    headers: {
-                        Authorization: `Bearer ${accessToken}`
-                    }
+                    headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
                 });
-                alert('Event successfully added to your Google Calendar!');
+                alert('Event added to your Google Calendar!');
             } catch (error) {
-                console.error(error);
                 alert('Failed to add event to Google Calendar');
             } finally {
                 setAddingEventId(null);
                 eventToAddRef.current = null;
             }
         },
-        onError: (error) => {
-            console.error('Login Failed:', error);
-            alert('Google Sign-In Failed');
-        }
+        onError: () => alert('Google Sign-In Failed')
     });
 
     const handleAddToCalendar = (event) => {
@@ -123,53 +140,88 @@ export default function Home() {
     };
 
     useEffect(() => {
-        if (activeTab === 'feed' || activeTab === 'calendar') {
-            fetchPersonalizedEvents();
-        } 
-        if (activeTab === 'clubs' || activeTab === 'calendar') {
+        fetchAllEvents();
+        fetchMyClubs();
+    }, []);
+
+    useEffect(() => {
+        if (activeTab === 'clubs') {
             fetchAllClubs();
-            fetchMyClubs();
         }
     }, [activeTab]);
 
+    // Skeleton loader
+    const EventSkeleton = () => (
+        <div className="glass-panel" style={{ padding: '24px', marginBottom: '14px' }}>
+            <div className="skeleton" style={{ height: '20px', width: '30%', marginBottom: '10px' }} />
+            <div className="skeleton" style={{ height: '24px', width: '60%', marginBottom: '14px' }} />
+            <div className="skeleton" style={{ height: '16px', width: '90%', marginBottom: '6px' }} />
+            <div className="skeleton" style={{ height: '16px', width: '70%' }} />
+        </div>
+    );
+
     return (
-        <div style={{ padding: '0 20px' }}>
+        <div style={{ padding: '0 4px' }}>
+            {/* Tabs */}
             <div className="tabs-container">
-                <button 
-                    onClick={() => setActiveTab('feed')}
-                    className={`tab-btn ${activeTab === 'feed' ? 'active' : ''}`}
-                >
-                    <Calendar size={18} /> Event Feed
+                <button onClick={() => setActiveTab('feed')} className={`tab-btn ${activeTab === 'feed' ? 'active' : ''}`}>
+                    <Calendar size={17} /> Event Feed
                 </button>
-                <button 
-                    onClick={() => setActiveTab('calendar')}
-                    className={`tab-btn ${activeTab === 'calendar' ? 'active' : ''}`}
-                >
-                    <LayoutGrid size={18} /> Visual Calendar
+                <button onClick={() => setActiveTab('calendar')} className={`tab-btn ${activeTab === 'calendar' ? 'active' : ''}`}>
+                    <LayoutGrid size={17} /> Calendar View
                 </button>
-                <button 
-                    onClick={() => setActiveTab('clubs')}
-                    className={`tab-btn ${activeTab === 'clubs' ? 'active' : ''}`}
-                >
-                    <Users size={18} /> Manage Clubs
+                <button onClick={() => setActiveTab('clubs')} className={`tab-btn ${activeTab === 'clubs' ? 'active' : ''}`}>
+                    <Users size={17} /> Clubs
                 </button>
             </div>
 
-            <div className="tab-content" style={{ animation: 'slideUp 0.4s ease-out' }}>
+            <div className="tab-content">
+                {/* FEED TAB */}
                 {activeTab === 'feed' && (
                     <div>
-                        <div className="feed-header">
-                            <h2 className="text-gradient">Upcoming in your Feed</h2>
-                        </div>
-                        
-                        {events.length === 0 ? (
-                            <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                                <Calendar size={48} style={{ margin: '0 auto 20px', opacity: 0.5 }} />
-                                <h3 style={{ color: '#fff', marginBottom: '10px' }}>No events found</h3>
-                                <p>You haven't followed any clubs yet, or your clubs have no upcoming events.</p>
-                                <button onClick={() => setActiveTab('clubs')} className="btn-primary" style={{ maxWidth: '250px', marginTop: '20px' }}>
-                                    Find Clubs to Follow
+                        <div className="feed-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h2 className="text-gradient">
+                                    {showPersonalized ? 'Your Personalized Feed' : 'All Campus Events'}
+                                </h2>
+                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '4px' }}>
+                                    {showPersonalized
+                                        ? 'Events from clubs you follow'
+                                        : `${allEvents.length} upcoming events across all clubs`}
+                                </p>
+                            </div>
+                            {myClubs.length > 0 && (
+                                <button
+                                    onClick={toggleFeedMode}
+                                    className="btn-secondary"
+                                    style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+                                >
+                                    {showPersonalized ? '🌐 Show All' : '⭐ My Feed'}
                                 </button>
+                            )}
+                        </div>
+
+                        {loadingEvents ? (
+                            <div>{[1, 2, 3].map(i => <EventSkeleton key={i} />)}</div>
+                        ) : events.length === 0 ? (
+                            <div className="glass-panel empty-state">
+                                <div className="empty-state-icon">📅</div>
+                                <h3>{showPersonalized ? 'No events from your clubs' : 'No events yet'}</h3>
+                                <p>
+                                    {showPersonalized
+                                        ? 'The clubs you follow haven\'t posted events yet.'
+                                        : 'No events have been added yet. Check back later or ask an admin to add some.'}
+                                </p>
+                                {showPersonalized && (
+                                    <button onClick={toggleFeedMode} className="btn-primary" style={{ maxWidth: '200px', margin: '0 auto' }}>
+                                        View All Events
+                                    </button>
+                                )}
+                                {!showPersonalized && (
+                                    <button onClick={() => setActiveTab('clubs')} className="btn-primary" style={{ maxWidth: '220px', margin: '0 auto' }}>
+                                        Explore Clubs
+                                    </button>
+                                )}
                             </div>
                         ) : (
                             <div className="events-list">
@@ -177,37 +229,37 @@ export default function Home() {
                                     <div key={event.id} className="event-card glass-panel">
                                         <div className="event-card-header">
                                             <div>
-                                                <span className="club-badge">{event.club.name}</span>
+                                                <span className="club-badge">{event.club?.name || 'NITK'}</span>
                                                 <h3 className="event-title">{event.title}</h3>
                                             </div>
                                             <div className="event-date">
                                                 {new Date(event.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                                             </div>
                                         </div>
-                                        
+
                                         <p className="event-desc">{event.description}</p>
-                                        
+
                                         <div className="event-meta">
-                                            <div className="meta-item">
-                                                <Clock size={16} /> {event.time}
-                                            </div>
-                                            <div className="meta-item">
-                                                <MapPin size={16} /> {event.venue}
-                                            </div>
+                                            <div className="meta-item"><Clock size={14} /> {event.time}</div>
+                                            <div className="meta-item"><MapPin size={14} /> {event.venue}</div>
+                                            {event.eligibility && (
+                                                <div className="meta-item">👥 {event.eligibility}</div>
+                                            )}
                                         </div>
-                                        
+
                                         <div className="event-actions">
                                             {event.registrationLink && (
-                                                <a href={event.registrationLink} target="_blank" rel="noopener noreferrer" className="btn-primary" style={{ width: 'auto', display: 'inline-block' }}>
+                                                <a href={event.registrationLink} target="_blank" rel="noopener noreferrer"
+                                                    className="btn-primary" style={{ width: 'auto', display: 'inline-flex', padding: '9px 18px', textDecoration: 'none' }}>
                                                     Register Now
                                                 </a>
                                             )}
-                                            <button 
+                                            <button
                                                 onClick={() => handleAddToCalendar(event)}
                                                 disabled={addingEventId === event.id}
                                                 className="btn-secondary"
                                             >
-                                                <Calendar size={16} />
+                                                <Calendar size={15} />
                                                 {addingEventId === event.id ? 'Adding...' : 'Add to Calendar'}
                                             </button>
                                         </div>
@@ -218,46 +270,73 @@ export default function Home() {
                     </div>
                 )}
 
+                {/* CALENDAR TAB */}
                 {activeTab === 'calendar' && (
                     <div className="glass-panel" style={{ padding: '24px' }}>
-                        <CalendarGrid events={events} />
+                        {loadingEvents ? (
+                            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)' }}>
+                                Loading calendar...
+                            </div>
+                        ) : (
+                            <CalendarGrid events={allEvents} />
+                        )}
                     </div>
                 )}
 
+                {/* CLUBS TAB */}
                 {activeTab === 'clubs' && (
                     <div>
                         <div className="feed-header">
                             <h2 className="text-gradient">Campus Clubs</h2>
-                            <p style={{ color: 'var(--text-secondary)' }}>Follow clubs to personalize your event feed and calendar.</p>
+                            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '4px' }}>
+                                Follow clubs to get personalized events in your feed
+                            </p>
                         </div>
-                        
-                        <div className="clubs-grid">
-                            {clubs.map(club => {
-                                const isFollowing = myClubs.includes(club.id);
-                                return (
-                                    <div key={club.id} className="club-card glass-panel">
-                                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1, minWidth: 0 }}>
-                                            <div className="club-avatar" style={{ flexShrink: 0 }}>{club.name.charAt(0)}</div>
-                                            <div style={{ flex: 1, minWidth: 0 }}>
-                                                <h4 style={{ color: '#fff', fontSize: '1.1rem', marginBottom: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{club.name}</h4>
-                                                <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>@{club.handle}</div>
+
+                        {loadingClubs ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {[1, 2, 3].map(i => (
+                                    <div key={i} className="skeleton" style={{ height: '72px', borderRadius: '14px' }} />
+                                ))}
+                            </div>
+                        ) : clubs.length === 0 ? (
+                            <div className="glass-panel empty-state">
+                                <div className="empty-state-icon">🏛️</div>
+                                <h3>No clubs registered yet</h3>
+                                <p>Ask an admin to register clubs so events start showing up here.</p>
+                            </div>
+                        ) : (
+                            <div className="clubs-grid">
+                                {clubs.map(club => {
+                                    const isFollowing = myClubs.includes(club.id);
+                                    return (
+                                        <div key={club.id} className="club-card glass-panel">
+                                            <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flex: 1, minWidth: 0 }}>
+                                                <div className="club-avatar">{club.name.charAt(0)}</div>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <h4 style={{ color: '#fff', fontSize: '0.95rem', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                        {club.name}
+                                                    </h4>
+                                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
+                                                        @{club.handle}
+                                                        {club.description && ` · ${club.description}`}
+                                                    </div>
+                                                </div>
                                             </div>
+                                            <button
+                                                onClick={() => toggleFollow(club.id)}
+                                                style={{ flexShrink: 0, marginLeft: '10px' }}
+                                                className={`btn-follow ${isFollowing ? 'following' : 'unfollowed'}`}
+                                            >
+                                                {isFollowing
+                                                    ? <><CheckCircle size={14} /> Following</>
+                                                    : <><PlusCircle size={14} /> Follow</>}
+                                            </button>
                                         </div>
-                                        <button 
-                                            onClick={() => toggleFollow(club.id)}
-                                            style={{ flexShrink: 0, marginLeft: '12px' }}
-                                            className={`btn-follow ${isFollowing ? 'following' : 'unfollowed'}`}
-                                        >
-                                            {isFollowing ? (
-                                                <><CheckCircle size={16} /> Following</>
-                                            ) : (
-                                                <><PlusCircle size={16} /> Follow</>
-                                            )}
-                                        </button>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

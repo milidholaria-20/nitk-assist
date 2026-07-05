@@ -59,7 +59,7 @@ export default function Admin() {
         if (!window.confirm(`Delete ${filename}?`)) return;
 
         try {
-            await api.delete(`/ai/documents/${filename}`);
+            await api.delete(`/ai/delete/${filename}`);
             await fetchDocuments();
         } catch {
             alert("Delete failed");
